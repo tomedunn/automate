@@ -688,19 +688,11 @@ func (t *LocalTarget) HabSupRestartRequired(desiredPkg habpkg.HabPkg) (bool, err
 
 // HabSupRestart restarts the Habitat Supervisor
 //
-// The list of services is used a mitigation which attempts to avoid
-// Habitat sending a SIGKILL to data services. The features described
-// at
+// Where possible, we restart hab-sup without restarting entire
+// process tree.
 //
-//  https://github.com/habitat-sh/habitat/issues/5162
-//  https://github.com/habitat-sh/habitat/issues/5135
-//
-// would help us avoid this.
-//
-// Note, when we move to multiple nodes, this mitigation will need to
-// change a bit since right now this assumes all clients of postgresql
-// & ES are on the same machine.
-//
+// The list of services is used in the case of a fully systemd restar
+// to mitigate the impact of a full shutdown.
 func (t *LocalTarget) HabSupRestart(sortedServiceList []string) (bool, error) {
 	habSupP, err := t.habSup.SupPkg()
 	if err != nil {
@@ -713,18 +705,17 @@ func (t *LocalTarget) HabSupRestart(sortedServiceList []string) (bool, error) {
 		}
 		return false, nil
 	}
+	return t.SystemdRestart(habSupP, sortedServiceList)
+}
 
+// SystemdRestart restarts the chef-automate systemd unit. It takes
+// the runnin hab-sup package and a list of services so that it can
+// manually shut down services before restart systemd, helping ensure
+// we don't SIGKILL any data services.
+func (t *LocalTarget) SystemdRestart(habSupP habpkg.HabPkg, sortedServiceList []string) (bool, error) {
 	services, err := t.HabClient.ListServices(context.Background())
 	if err != nil {
 		return false, errors.Wrap(err, "querying running services")
-	}
-
-	supPkg, err := t.habSup.SupPkg()
-	if err != nil {
-		// TODO(ssd) 2018-06-13: Should we just try with
-		// whatever hab we have, or maybe skip the mitigation
-		// in this case?
-		return false, errors.Wrap(err, "could not fetch hab-sup version to ensure compatible unload calls")
 	}
 
 	// Create a core/hab package with the same version of the
@@ -732,7 +723,7 @@ func (t *LocalTarget) HabSupRestart(sortedServiceList []string) (bool, error) {
 	// and hab-sup at the same time. Typically, we think this
 	// version of hab should be installed, but just in case we
 	// attempt an install.
-	binPkg := habpkg.NewWithVersion("core", "hab", supPkg.Version())
+	binPkg := habpkg.NewWithVersion("core", "hab", habSupP.Version())
 	err = t.installHabViaHab(binPkg)
 	if err != nil {
 		logrus.WithError(err).Warn("failed to install hab version required for unload")
@@ -760,7 +751,7 @@ func (t *LocalTarget) HabSupRestart(sortedServiceList []string) (bool, error) {
 
 		svc := habpkg.New(svcInfo.Pkg.Origin, svcInfo.Pkg.Name)
 		logrus.WithField("service", svcName).Info("Unloading service before supervisor shutdown")
-		err := t.unloadServiceWithHabVersion(&svc, binPkg, supPkg)
+		err := t.unloadServiceWithHabVersion(&svc, binPkg, habSupP)
 		if err != nil {
 			logrus.WithFields(logrus.Fields{
 				"svc":   habpkg.Ident(&svc),
@@ -782,7 +773,7 @@ func (t *LocalTarget) HabSupRestart(sortedServiceList []string) (bool, error) {
 	}
 
 	err = t.Executor.Run("systemctl", command.Args("restart", "chef-automate.service"))
-	return true, errors.Wrap(err, "failed to restart habitat supervisor")
+	return true, errors.Wrap(err, "failed to restart systemd")
 }
 
 func (t *LocalTarget) waitForUnload(name string, timeout time.Duration) error {

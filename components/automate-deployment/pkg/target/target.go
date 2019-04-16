@@ -106,6 +106,7 @@ type Target interface {
 
 	SystemdReloadRequired() (bool, error)
 	SystemdReload() error
+	SystemdRestart(habpkg.HabPkg, []string) (bool, error)
 	SystemdRunning() (bool, error)
 
 	HabSupRestartRequired(habpkg.HabPkg) (bool, error)

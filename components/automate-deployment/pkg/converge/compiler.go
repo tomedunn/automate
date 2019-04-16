@@ -704,14 +704,34 @@ func (phase *SupervisorUpgradePhase) Run(w *eventWriter) error {
 			return errors.Wrap(err, "failed to update systemd unit file")
 		}
 
-		err = phase.reloadSystemd(w, target)
+		systemdReloaded, err := phase.reloadSystemd(w, target)
 		if err != nil {
 			return errors.Wrap(err, "failed to reload systemd daemon")
 		}
 
-		pendingRestart, err := phase.restartHabSup(w, target, services)
-		if err != nil {
-			return errors.Wrap(err, "failed to restart habitat supervisor")
+		// TODO(ssd) 2019-04-16: We if we want this to handle
+		// the case where our reload succeeded but then we
+		// crashed or some other problem prevent a restart in
+		// a previous converge loop, we need to check for
+		// other indications that a reload might be needed:
+		// - HAB_LAUNCH_BIN out of date
+		systemdRestartRequired := systemdReloaded
+		var pendingRestart bool
+		if systemdRestartRequired {
+			currentSupP, err := target.HabSup().SupPkg()
+			if err != nil {
+				return errors.Wrap(err, "failed to determine running hab-sup version")
+			}
+			serviceList := make([]string, len(services))
+			for i, svc := range services {
+				serviceList[i] = svc.Name
+			}
+			pendingRestart, err = target.SystemdRestart(currentSupP, serviceList)
+		} else {
+			pendingRestart, err = phase.restartHabSup(w, target, services)
+			if err != nil {
+				return errors.Wrap(err, "failed to restart habitat supervisor")
+			}
 		}
 
 		anyPendingRestarts = anyPendingRestarts || pendingRestart
@@ -852,13 +872,13 @@ func (phase *SupervisorUpgradePhase) updateSystemdUnitFile(w *eventWriter, targe
 	return nil
 }
 
-func (phase *SupervisorUpgradePhase) reloadSystemd(w *eventWriter, target target.Target) error {
+func (phase *SupervisorUpgradePhase) reloadSystemd(w *eventWriter, target target.Target) (bool, error) {
 	w.ReloadingSystemd()
 	reloadRequired, err := target.SystemdReloadRequired()
 	if err != nil {
 		err = errors.Wrap(err, "failed to determine if systemd daemon-reload is required")
 		w.ReloadingSystemdFailed(err)
-		return err
+		return false, err
 	}
 
 	if reloadRequired {
@@ -866,15 +886,15 @@ func (phase *SupervisorUpgradePhase) reloadSystemd(w *eventWriter, target target
 		if err != nil {
 			err = errors.Wrap(err, "failed to reload systemd daemon")
 			w.ReloadingSystemdFailed(err)
-			return err
+			return false, err
 		}
 
 		w.ReloadingSystemdSuccess(true)
-		return nil
+		return true, nil
 	}
 
 	w.ReloadingSystemdSuccess(false)
-	return nil
+	return false, nil
 }
 
 func (phase *SupervisorUpgradePhase) Name() string {
