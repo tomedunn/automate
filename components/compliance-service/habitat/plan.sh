@@ -39,7 +39,7 @@ pkg_deps=(
   ${local_platform_tools_origin:-chef}/automate-platform-tools
   # WARNING: Update with care. The chef/inspec is managed with Expeditor.
   # See .expeditor/update-inspec-version.sh for details
-  chef/inspec/3.9.0/20190401200826
+  chef/inspec/4.0.8/20190412140954
   chef/mlsa
 )
 
